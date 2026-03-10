@@ -1,120 +1,203 @@
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <vector>
+#include <string>
+#include <iomanip>
 using namespace std;
 
-/********************DO NOT EDIT**********************/
-// Function prototype. Defined later.
-void read_opinions(string filename); // reads file into opinions vector and updates total_nodes as needed
-void read_edges(string filename); // reads file into edge_list, defined later
-void build_adj_matrix(); // convert edge_list to adjacency matrix
+// linked list node
+struct ListNode {
+    int val;
+    ListNode* next;
+    ListNode(int v) : val(v), next(nullptr) {}
+};
 
-int total_nodes = 0; // We keep track of the total number of nodes based on largest node id.
+// global data
+vector<int> opinions;                  // opinions[i] = 0 or 1
+vector<pair<int, int>> edge_list;      // (u, v): u influences v
+vector<ListNode*> adj;                 // adj[v]: all nodes that influence v
 
-
-/****************************************************************/
-
-/******** Create adjacency matrix and vector of opinions */
-// simple vector to hold each node's opinion (0 or 1)
-std::vector<int> opinions;
-
-// global adjacency matrix initialized later
-std::vector<std::vector<int>> adj;
-
-// edge list: each row contains {source, target}
-std::vector<std::vector<int>> edge_list;
-
-void build_adj_matrix()
-{
-    
+// free linked lists
+void free_adj() {
+    for (int i = 0; i < (int)adj.size(); i++) {
+        ListNode* cur = adj[i];
+        while (cur != nullptr) {
+            ListNode* tmp = cur;
+            cur = cur->next;
+            delete tmp;
+        }
+    }
+    adj.clear();
 }
 
-double calculate_fraction_of_ones()
-{
-   
+// read opinions.txt
+void load_opinions(const string& filename) {
+    ifstream fin(filename);
+    if (!fin.is_open()) {
+        cerr << "Failed to open " << filename << endl;
+        exit(1);
+    }
+
+    vector<pair<int, int>> temp;
+    string line;
+    int max_id = -1;
+
+    while (getline(fin, line)) {
+        if (line.empty()) continue;
+        for (char& c : line) {
+            if (c == ',') c = ' ';
+        }
+        stringstream ss(line);
+        int id, op;
+        if (ss >> id >> op) {
+            temp.push_back({id, op});
+            if (id > max_id) max_id = id;
+        }
+    }
+
+    opinions.assign(max_id + 1, 0);
+    for (auto& p : temp) {
+        opinions[p.first] = p.second;
+    }
+
+    fin.close();
 }
 
-// For a given node, count majority opinion among its neighbours. Tie -> 0.
-int get_majority_friend_opinions(int node)
-{
+// read edge_list.txt
+void load_edges(const string& filename) {
+    ifstream fin(filename);
+    if (!fin.is_open()) {
+        cerr << "Failed to open " << filename << endl;
+        exit(1);
+    }
 
+    edge_list.clear();
+    string line;
+    while (getline(fin, line)) {
+        if (line.empty()) continue;
+        for (char& c : line) {
+            if (c == ',') c = ' ';
+        }
+        stringstream ss(line);
+        int u, v;
+        if (ss >> u >> v) {
+            edge_list.push_back({u, v});
+        }
+    }
+
+    fin.close();
 }
 
-// Calculate new opinions for all voters and return if anyone's opinion changed
-bool update_opinions()
-{
+// (1)(2) allocate adjacency list and populate it
+// For edge u -> v, voter u influences voter v,
+// so u should be in v's friend list.
+void build_adj_matrix() {
+    free_adj();
 
+    int n = opinions.size();
+    adj.assign(n, nullptr);
+
+    for (auto& e : edge_list) {
+        int u = e.first;
+        int v = e.second;
+
+        if (u < 0 || u >= n || v < 0 || v >= n) continue;
+
+        ListNode* node = new ListNode(u);
+        node->next = adj[v];
+        adj[v] = node;
+    }
+}
+
+// (3) calculate fraction of nodes with opinion 1
+double calculate_fraction_of_ones() {
+    if (opinions.empty()) return 0.0;
+
+    int count_one = 0;
+    for (int op : opinions) {
+        if (op == 1) count_one++;
+    }
+
+    return (double)count_one / (double)opinions.size();
+}
+
+// (4) majority opinion among node's neighbours; tie -> 0
+int get_majority_friend_opinions(int node) {
+    int count0 = 0;
+    int count1 = 0;
+
+    ListNode* cur = adj[node];
+    while (cur != nullptr) {
+        int neighbor = cur->val;
+        if (opinions[neighbor] == 1) count1++;
+        else count0++;
+        cur = cur->next;
+    }
+
+    if (count1 > count0) return 1;
+    return 0; // tie or 0 is majority
+}
+
+// (5) update all opinions simultaneously
+// return true if any node changed
+bool update_opinions() {
+    int n = opinions.size();
+    vector<int> new_opinions(n);
+
+    for (int i = 0; i < n; i++) {
+        new_opinions[i] = get_majority_friend_opinions(i);
+    }
+
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (new_opinions[i] != opinions[i]) {
+            changed = true;
+            break;
+        }
+    }
+
+    opinions = new_opinions;
+    return changed;
 }
 
 int main() {
-    // no preallocation; vectors grow on demand
-
-    // Read input files
-    read_opinions("opinions.txt"); 
-    read_edges("edge_list.txt");
-
-    // convert edge list into adjacency matrix once we know total_nodes
+    load_opinions("opinions.txt");
+    load_edges("edge_list.txt");
     build_adj_matrix();
-    
-    cout << "Total nodes: " << total_nodes << endl;
-    
-    // Run simulation
-    int max_iterations = 30;
-    int iteration = 0;
-    bool opinions_changed = true;
-    
-    // Print initial state
-    cout << "Iteration " << iteration << ": fraction of 1's = " 
-         << calculate_fraction_of_ones() << endl;
-    
-    /// (6)  //////////////////////////////////////////////
-    
 
-    ////////////////////////////////////////////////////////
-    // Print final result
+    int max_iterations = 1000;
+    int iteration = 0;
+
+    cout << fixed << setprecision(2);
+
+    // print iteration 0
+    cout << "Iteration " << iteration
+         << ": fraction of 1's = "
+         << calculate_fraction_of_ones() << endl;
+
+    // print every iteration from 1 until convergence / max_iterations
+    while (iteration < max_iterations) {
+        bool changed = update_opinions();
+        iteration++;
+
+        cout << "Iteration " << iteration
+             << ": fraction of 1's = "
+             << calculate_fraction_of_ones() << endl;
+
+        if (!changed) break;
+    }
+
     double final_fraction = calculate_fraction_of_ones();
-    cout << "Iteration " << iteration << ": fraction of 1's = " 
-         << final_fraction << endl;
-    
-    if(final_fraction == 1.0)
-        cout << "Consensus reached: all 1's" << endl;
-    else if(final_fraction == 0.0)
+
+    if (final_fraction == 0.0) {
         cout << "Consensus reached: all 0's" << endl;
-    else
-        cout << "No consensus reached after " << iteration << " iterations" << endl;
-    
+    } else if (final_fraction == 1.0) {
+        cout << "Consensus reached: all 1's" << endl;
+    } else {
+        cout << "No full consensus reached." << endl;
+    }
+
+    free_adj();
     return 0;
 }
-
-
-/*********** Functions to read files **************************/ 
-
-// Read opinion vector from file.
-void read_opinions(string filename)
-{
-    ifstream file(filename);
-    int id, opinion;
-    while(file >> id >> opinion)
-    {
-        opinions.push_back(opinion);
-        if(id >= total_nodes) total_nodes = id+1;
-    }
-    file.close();
-}
-
-// Read edge list from file and update total nodes as needed.
-void read_edges(string filename)
-{
-    ifstream file(filename);
-    int source, target;
-    
-    while(file >> source >> target)
-    {
-        edge_list.push_back({source, target});
-        if(source >= total_nodes) total_nodes = source+1;
-        if(target >= total_nodes) total_nodes = target+1;
-    }
-    file.close();
-}
-
-/********************************************************************** */
